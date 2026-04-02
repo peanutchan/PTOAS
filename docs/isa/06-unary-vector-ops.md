@@ -5,6 +5,15 @@
 
 Element-wise operations that take one vector input and produce one vector output.
 
+## Common Operand Model
+
+- `%input` is the source vector register value.
+- `%mask` is the predicate operand. For this family, inactive lanes follow the
+  predication behavior of the selected instruction form: zeroing forms
+  zero-fill inactive lanes, while merging forms preserve the destination value.
+- `%result` is the destination vector register value. Unless stated otherwise,
+  `%result` has the same lane count and element type as `%input`.
+
 ## CA latency (A5, Ascend910_9599 CA)
 
 Cycle-accurate simulator **popped→retire** latency (cycles). **fp16** values use **aclFloat16** in traces where measured. **bf16:** no simple-tile ST coverage on this surface; treat as **—**.
@@ -21,15 +30,6 @@ Cycle-accurate simulator **popped→retire** latency (cycles). **fp16** values u
 | `pto.vrelu` | `RV_VRELU` | **5** | **5** | — |
 | `pto.vnot` | `RV_VNOT` | — | int-only paths | — |
 | `pto.vmov` | `RV_VLD` proxy | **9** | **9** | — |
-
-## Common Operand Model
-
-- `%input` is the source vector register value.
-- `%mask` is the predicate operand. For this family, inactive lanes follow the
-  predication behavior of the selected instruction form: zeroing forms
-  zero-fill inactive lanes, while merging forms preserve the destination value.
-- `%result` is the destination vector register value. Unless stated otherwise,
-  `%result` has the same lane count and element type as `%input`.
 
 ---
 

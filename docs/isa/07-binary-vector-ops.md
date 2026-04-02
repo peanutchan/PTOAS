@@ -5,6 +5,15 @@
 
 Element-wise operations that take two vector inputs and produce one vector output.
 
+## Common Operand Model
+
+- `%lhs` and `%rhs` are the two source vector register values.
+- `%mask` is the predicate operand `Pg` that gates which lanes participate.
+- `%result` is the destination vector register value. Unless explicitly noted,
+  it has the same lane count and element type as the inputs.
+- Unless explicitly documented otherwise, `%lhs`, `%rhs`, and `%result` MUST
+  have matching vector shapes and element types.
+
 ## CA latency (A5, Ascend910_9599 CA)
 
 Cycle-accurate simulator **popped→retire** latency (cycles). **fp16** uses **aclFloat16** in measured traces. **bf16:** — (no dedicated vec tile ST on this surface).
@@ -15,15 +24,6 @@ Cycle-accurate simulator **popped→retire** latency (cycles). **fp16** uses **a
 | `pto.vsub` | `RV_VSUB` | **7** | **7** | — |
 | `pto.vmul` | `RV_VMUL` | **8** | **8** | — |
 | `pto.vdiv` | `RV_VDIV` | **17** | **22** | — |
-
-## Common Operand Model
-
-- `%lhs` and `%rhs` are the two source vector register values.
-- `%mask` is the predicate operand `Pg` that gates which lanes participate.
-- `%result` is the destination vector register value. Unless explicitly noted,
-  it has the same lane count and element type as the inputs.
-- Unless explicitly documented otherwise, `%lhs`, `%rhs`, and `%result` MUST
-  have matching vector shapes and element types.
 
 ---
 

@@ -5,15 +5,6 @@
 
 Operations that convert between data types (float/int, narrowing/widening).
 
-## CA latency (A5, Ascend910_9599 CA)
-
-Cycle-accurate simulator **popped→retire** latency (cycles). Only representative traces below; other `pto.vcvt` conversion pairs depend on the RV lowering in the trace.
-
-| PTO op | RV (CA) | Note | Latency |
-|--------|---------|------|---------|
-| `pto.vcvt` | `RV_VCVT_F2F` | f32→f16 | **7** |
-| `pto.vci` | — | no vector `RV_*` in sampled `veccore0` trace | — |
-
 ## Common Operand Model
 
 - `%input` is the source vector register value.
@@ -22,6 +13,15 @@ Cycle-accurate simulator **popped→retire** latency (cycles). Only representati
   selection in attribute form.
 - The single `pto.vcvt` surface covers float-int, float-float, int-float, and
   int-int conversion families.
+
+## CA latency (A5, Ascend910_9599 CA)
+
+Cycle-accurate simulator **popped→retire** latency (cycles). Only representative traces below; other `pto.vcvt` conversion pairs depend on the RV lowering in the trace.
+
+| PTO op | RV (CA) | Note | Latency |
+|--------|---------|------|---------|
+| `pto.vcvt` | `RV_VCVT_F2F` | f32→f16 | **7** |
+| `pto.vci` | — | no vector `RV_*` in sampled `veccore0` trace | — |
 
 ---
 

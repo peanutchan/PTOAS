@@ -5,15 +5,6 @@
 
 Operations that combine a vector with a scalar value, applying the scalar to every lane.
 
-## CA latency (A5, Ascend910_9599 CA)
-
-Cycle-accurate simulator **popped→retire** latency (cycles). **fp16** uses **aclFloat16** in measured traces. **bf16:** —.
-
-| PTO op | RV (CA) | fp32 | fp16 | bf16 |
-|--------|---------|------|------|------|
-| `pto.vadds` | `RV_VADDS` | **7** | **7** | — |
-| `pto.vmuls` | `RV_VMULS` | **8** | **8** | — |
-
 ## Common Operand Model
 
 - `%input` is the source vector register value.
@@ -22,6 +13,15 @@ Cycle-accurate simulator **popped→retire** latency (cycles). **fp16** uses **a
 - `%result` is the destination vector register value.
 - For 32-bit scalar forms, the scalar source MUST satisfy the backend's legal
   scalar-source constraints for this family.
+
+## CA latency (A5, Ascend910_9599 CA)
+
+Cycle-accurate simulator **popped→retire** latency (cycles). **fp16** uses **aclFloat16** in measured traces. **bf16:** —.
+
+| PTO op | RV (CA) | fp32 | fp16 | bf16 |
+|--------|---------|------|------|------|
+| `pto.vadds` | `RV_VADDS` | **7** | **7** | — |
+| `pto.vmuls` | `RV_VMULS` | **8** | **8** | — |
 
 ---
 
