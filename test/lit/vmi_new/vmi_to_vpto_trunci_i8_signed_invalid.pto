@@ -24,4 +24,4 @@ module {
   }
 }
 
-// CHECK: 'pto.vcvt' op unsupported vcvt source/result element type pair
+// CHECK: 'pto.vcvt' op sat attr is not valid for this vcvt type pair
