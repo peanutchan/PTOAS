@@ -47,4 +47,4 @@ module {
 // CHECK: pto.vor
 // CHECK-NOT: pto.vmi.
 // CHECK-NOT: !pto.vmi.
-// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: unrealized_conversion_cast

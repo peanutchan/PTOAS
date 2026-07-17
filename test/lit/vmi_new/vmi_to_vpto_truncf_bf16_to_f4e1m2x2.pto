@@ -17,7 +17,7 @@ module {
   func.func @vmi_to_vpto_truncf_bf16_to_f4e1m2x2(
       %wide: !pto.vmi.vreg<128xbf16, #pto.vmi.layout<deinterleaved = 4>>)
       -> !pto.vreg<256x!pto.f4E1M2x2> {
-    %packed = pto.vmi.vcvt %wide
+    %packed = pto.vmi.vcvt %wide {saturate = "NOSAT"}
         : !pto.vmi.vreg<128xbf16, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<128x!pto.f4E1M2x2, #pto.vmi.layout<contiguous>>
     %p = "pto.vmi.unpack"(%packed)

@@ -1677,11 +1677,12 @@ LogicalResult VMITruncFOp::verify() {
         rounding != "Z")
       return emitOpError("rounding attr must be R, A, H, or Z");
   }
-  if (auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate")) {
-    StringRef satVal = satAttr.getValue();
-    if (satVal != "SAT" && satVal != "NOSAT")
-      return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
-  }
+  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+  if (!satAttr)
+    return emitOpError("'saturate' attribute is required (SAT or NOSAT)");
+  StringRef satVal = satAttr.getValue();
+  if (satVal != "SAT" && satVal != "NOSAT")
+    return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
   return success();
 }
 
@@ -1698,11 +1699,12 @@ LogicalResult VMIFPToSIOp::verify() {
                        "type");
   if (getVMIElementBitWidth(resultType.getElementType()) != 32)
     return emitOpError("requires 32-bit integer result element type");
-  if (auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate")) {
-    StringRef satVal = satAttr.getValue();
-    if (satVal != "SAT" && satVal != "NOSAT")
-      return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
-  }
+  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+  if (!satAttr)
+    return emitOpError("'saturate' attribute is required (SAT or NOSAT)");
+  StringRef satVal = satAttr.getValue();
+  if (satVal != "SAT" && satVal != "NOSAT")
+    return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
   return success();
 }
 
@@ -1771,11 +1773,12 @@ LogicalResult VMITruncIOp::verify() {
       getVMIElementBitWidth(resultType.getElementType()))
     return emitOpError(
         "requires result element type to be narrower than source element type");
-  if (auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate")) {
-    StringRef satVal = satAttr.getValue();
-    if (satVal != "SAT" && satVal != "NOSAT")
-      return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
-  }
+  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+  if (!satAttr)
+    return emitOpError("'saturate' attribute is required (SAT or NOSAT)");
+  StringRef satVal = satAttr.getValue();
+  if (satVal != "SAT" && satVal != "NOSAT")
+    return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
   return success();
 }
 
@@ -3406,14 +3409,21 @@ LogicalResult VMICvtOp::verify() {
   }
 
   // --- saturate ---
-  if (auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate")) {
-    if (dir != CvtDirection::FpNarrow && dir != CvtDirection::IntNarrow &&
-        dir != CvtDirection::FpToSi)
-      return emitOpError("'saturate' attribute is only valid for "
-                         "narrowing or fp-to-int conversions");
+  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+  bool needSat = (dir == CvtDirection::FpNarrow ||
+                  dir == CvtDirection::IntNarrow ||
+                  dir == CvtDirection::FpToSi);
+  if (needSat) {
+    if (!satAttr)
+      return emitOpError("'saturate' attribute is required for fp-narrow / "
+                         "int-narrow / fp-to-si conversions; write 'SAT' or "
+                         "'NOSAT'");
     StringRef satVal = satAttr.getValue();
     if (satVal != "SAT" && satVal != "NOSAT")
       return emitOpError("saturate must be 'SAT' or 'NOSAT'");
+  } else if (satAttr) {
+    return emitOpError("'saturate' attribute is only valid for fp-narrow / "
+                       "int-narrow / fp-to-si conversions");
   }
 
   // --- sign ---
