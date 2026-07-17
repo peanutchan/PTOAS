@@ -802,13 +802,11 @@ LogicalResult VMIVRegType::verify(function_ref<InFlightDiagnostic()> emitError,
                        << formatVMIVRegType(elementCount, elementType, layout)
                        << "' expected an 8-bit, 16-bit, or 32-bit logical "
                           "element type";
-  if (pto::isPTOFloat4PackedType(elementType))
-    return emitError()
-           << "'" << formatVMIVRegType(elementCount, elementType, layout)
-           << "' uses a packed FP4 physical pair type as a VMI logical "
-              "element type; packed FP4 input/output is not a supported VMI "
-              "surface because the logical FP4 lane count and physical packed "
-              "byte count are ambiguous";
+  if (pto::isPTOFloat4PackedType(elementType)) {
+    // FP4 types (f4E1M2x2, f4E2M1x2) are treated as 8-bit packed-pair
+    // elements at the VMI level; the physical layer resolves lane vs.
+    // value ambiguity through the part mechanism (Packed4).
+  }
 
   if (layout && !mlir::isa<VMILayoutAttr>(layout))
     return emitError() << "'"
