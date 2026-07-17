@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--check-tag",
-        help="Optional release tag to validate, e.g. v0.8 or 0.8.",
+        help="Optional release tag to validate, e.g. ptoas-v0.8 or v0.8.",
     )
     return parser.parse_args()
 
@@ -45,7 +45,12 @@ def read_base_version(cmake_file: pathlib.Path) -> str:
     return match.group(1)
 
 def normalize_tag(tag: str) -> str:
-    return tag[1:] if tag.startswith("v") else tag
+    normalized = tag.strip()
+    if normalized.startswith("ptoas-"):
+        normalized = normalized[len("ptoas-"):]
+    if normalized.startswith("v"):
+        normalized = normalized[1:]
+    return normalized
 
 
 def main() -> int:

@@ -310,6 +310,14 @@ def VMIShRUIOp : VMI_Op<"shrui", [Pure]> {
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `->` type($result)";
 }
 
+def VMIShRSIOp : VMI_Op<"shrsi", [Pure]> {
+  let summary = "VMI signed integer elementwise arithmetic right shift";
+  let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs);
+  let results = (outs VMI_VRegTypeConstraint:$result);
+  let hasVerifier = 1;
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `,` type($rhs) `->` type($result)";
+}
+
 def VMINotOp : VMI_Op<"not", [Pure]> {
   let summary = "VMI integer elementwise bitwise not";
   let arguments = (ins VMI_VRegTypeConstraint:$source);
@@ -1052,7 +1060,7 @@ def VMIVshlOp : VMI_Op<"vshl", [Pure]> {
 }
 
 def VMIVshrOp : VMI_Op<"vshr", [Pure]> {
-  let summary = "VMI unsigned elementwise right shift";
+  let summary = "VMI signedness-aware elementwise right shift";
   let arguments = (ins VMI_VRegTypeConstraint:$lhs, VMI_VRegTypeConstraint:$rhs,
                        Variadic<VMI_MaskTypeConstraint>:$mask,
                        OptionalAttr<StrAttr>:$pmode);
@@ -1612,16 +1620,18 @@ def VMIVpreluOp : VMI_Op<"vprelu", [Pure]> {
 }
 
 def VMIVmullOp : VMI_Op<"vmull", [Pure]> {
-  let summary = "VMI widening 32x32->64 multiply";
+  let summary = "VMI widening 32x32 multiply with low/high results";
   let description = [{
-    Computes per-lane 32-bit x 32-bit -> 64-bit product.
-    The result occupies two physical registers (hi + lo) accessed through
-    a virtual width axis.
+    Computes a per-lane 32-bit x 32-bit product and returns its low and high
+    32-bit halves. Inactive lanes in both results are zero. The initial
+    contract accepts exactly 64, 128, or 256 lanes of i32 or ui32 data.
 
     Example:
     ```
-    %res = pto.vmi.vmull %a, %b, %mask
-      : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>, !pto.vmi.mask<64> -> !pto.vmi.vreg<64xi64>
+    %low, %high = pto.vmi.vmull %a, %b, %mask
+      : !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>,
+        !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<64xi32>, !pto.vmi.vreg<64xi32>
     ```
   }];
   let arguments = (ins
@@ -1630,9 +1640,12 @@ def VMIVmullOp : VMI_Op<"vmull", [Pure]> {
     VMI_MaskTypeConstraint:$mask,
     OptionalAttr<StrAttr>:$pmode
   );
-  let results = (outs VMI_VRegTypeConstraint:$result);
+  let results = (outs
+    VMI_VRegTypeConstraint:$low,
+    VMI_VRegTypeConstraint:$high
+  );
   let hasVerifier = 1;
-  let assemblyFormat = "$a `,` $b `,` $mask attr-dict `:` type($a) `,` type($b) `,` type($mask) `->` type($result)";
+  let assemblyFormat = "$a `,` $b `,` $mask attr-dict `:` type($a) `,` type($b) `,` type($mask) `->` type($low) `,` type($high)";
 }
 
 def VMIVmulaOp : VMI_Op<"vmula", [Pure]> {

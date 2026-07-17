@@ -26,7 +26,7 @@
 | 18 | `pto.vmi.vxor` | 3: Eltwise | A | Elementwise bitwise XOR |
 | 19 | `pto.vmi.vnot` | 3: Eltwise | A | Elementwise bitwise NOT |
 | 20 | `pto.vmi.vshl` | 3: Eltwise | A | Elementwise left shift |
-| 21 | `pto.vmi.vshr` | 3: Eltwise | A | Elementwise unsigned right shift |
+| 21 | `pto.vmi.vshr` | 3: Eltwise | A | Elementwise signedness-aware right shift |
 | 22 | `pto.vmi.vadds` | 3: Eltwise | A | Vector-scalar add |
 | 23 | `pto.vmi.vmuls` | 3: Eltwise | A | Vector-scalar multiply |
 | 24 | `pto.vmi.vmaxs` | 3: Eltwise | A | Vector-scalar maximum |
@@ -47,7 +47,7 @@
 | 39 | `pto.vmi.vaxpy` | 7: SFU | A | Fused α·x+y |
 | 40 | `pto.vmi.vlrelu` | 7: SFU | A | Leaky ReLU |
 | 41 | `pto.vmi.vprelu` | 7: SFU | A | Parametric ReLU |
-| 42 | `pto.vmi.vmull` | 7: SFU | B | Widening 32×32→64 multiply |
+| 42 | `pto.vmi.vmull` | 7: SFU | A | Pair-result widening 32×32 multiply |
 | 43 | `pto.vmi.vmula` | 7: SFU | A | Fused multiply-add |
 | 44 | `pto.vmi.vchist` | 7: SFU | B | Cumulative histogram (half-axis) |
 | 45 | `pto.vmi.vdhist` | 7: SFU | B | Distribution histogram (plain per-bin) |

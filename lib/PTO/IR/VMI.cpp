@@ -1233,6 +1233,16 @@ LogicalResult VMIShRUIOp::verify() {
   return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
 }
 
+LogicalResult VMIShRSIOp::verify() {
+  auto lhsType = cast<VMIVRegType>(getLhs().getType());
+  auto rhsType = cast<VMIVRegType>(getRhs().getType());
+  auto resultType = cast<VMIVRegType>(getResult().getType());
+  if (!isVMISignedOrSignlessI8I16I32Type(lhsType.getElementType()))
+    return emitOpError(
+        "requires signless or signed i8, i16, or i32 VMI element type");
+  return verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType);
+}
+
 LogicalResult VMINotOp::verify() {
   auto sourceType = cast<VMIVRegType>(getSource().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
@@ -2818,9 +2828,8 @@ LogicalResult VMIVshrOp::verify() {
   auto rhsType = cast<VMIVRegType>(getRhs().getType());
   auto resultType = cast<VMIVRegType>(getResult().getType());
   auto integerType = dyn_cast<IntegerType>(lhsType.getElementType());
-  if (!integerType || integerType.isSigned())
-    return emitOpError(
-        "requires signless or unsigned integer VMI element type");
+  if (!integerType)
+    return emitOpError("requires integer VMI element type");
   if (failed(verifyElementwiseVRegOp(getOperation(), lhsType, rhsType, resultType)))
     return failure();
   if (failed(verifyVMIVariadicPmodeMask(getOperation(), getMask(),
@@ -3258,34 +3267,34 @@ LogicalResult VMIVmullOp::verify() {
   auto aType = cast<VMIVRegType>(getA().getType());
   auto bType = cast<VMIVRegType>(getB().getType());
   auto maskType = cast<VMIMaskType>(getMask().getType());
-  auto resultType = cast<VMIVRegType>(getResult().getType());
+  auto lowType = cast<VMIVRegType>(getLow().getType());
+  auto highType = cast<VMIVRegType>(getHigh().getType());
 
-  auto aElemType = dyn_cast<IntegerType>(aType.getElementType());
-  if (!aElemType || aElemType.getWidth() != 32)
-    return emitOpError("requires a and b element type to be i32 or u32");
-
-  if (aType != bType)
-    return emitOpError("requires a and b to have identical VMI vreg types");
-
-  auto resultElemType = dyn_cast<IntegerType>(resultType.getElementType());
-  if (!resultElemType || resultElemType.getWidth() != 64)
-    return emitOpError("requires result element type to be i64 or u64");
-
-  if (aElemType.isUnsigned() != resultElemType.isUnsigned())
+  auto isLegalElementType = [](Type type) {
+    auto integerType = dyn_cast<IntegerType>(type);
+    return integerType && integerType.getWidth() == 32 &&
+           (integerType.isSignless() || integerType.isUnsigned());
+  };
+  if (!isLegalElementType(aType.getElementType()) ||
+      !isLegalElementType(bType.getElementType()) ||
+      !isLegalElementType(lowType.getElementType()) ||
+      !isLegalElementType(highType.getElementType()))
     return emitOpError(
-        "requires result signedness to match input signedness");
+        "requires a, b, low, and high element types to be exactly i32 or ui32");
 
-  if (aType.getElementCount() != resultType.getElementCount())
+  if (aType != bType || aType != lowType || aType != highType)
     return emitOpError(
-        "requires input and result logical lane counts to match");
+        "requires a, b, low, and high to have identical VMI vreg types");
+
+  int64_t lanes = aType.getElementCount();
+  if (lanes != 64 && lanes != 128 && lanes != 256)
+    return emitOpError("requires logical lane count to be 64, 128, or 256");
 
   if (failed(verifyMaskMatchesData(getOperation(), maskType, aType)))
     return failure();
 
-  if (auto pmode = getPmode()) {
-    if (pmode.value() != "merge" && pmode.value() != "zero")
-      return emitOpError("pmode must be 'merge' or 'zero'");
-  }
+  if (auto pmode = getPmode(); pmode && pmode.value() != "zero")
+    return emitOpError("pmode must be 'zero' when specified");
   return success();
 }
 

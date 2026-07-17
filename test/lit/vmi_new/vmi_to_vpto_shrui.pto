@@ -6,7 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy | FileCheck %s --check-prefix=LEGACY
+// RUN: pto-test-opt %s -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-lower-unified-to-legacy -vmi-to-vpto | FileCheck %s --check-prefix=LOWER
 
 module {
   func.func @vmi_to_vpto_shrui(
@@ -19,15 +20,19 @@ module {
   }
 }
 
-// CHECK-LABEL: func.func @vmi_to_vpto_shrui(
-// CHECK-SAME: %[[VALUE0:[^,]+]]: !pto.vreg<128xui16>
-// CHECK-SAME: %[[VALUE1:[^,]+]]: !pto.vreg<128xui16>
-// CHECK-SAME: %[[AMOUNT0:[^,]+]]: !pto.vreg<128xui16>
-// CHECK-SAME: %[[AMOUNT1:[^)]+]]: !pto.vreg<128xui16>
-// CHECK-SAME: -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>)
-// CHECK-DAG: %[[SHR0:.*]] = pto.vshr %[[VALUE0]], %[[AMOUNT0]], {{.*}} : !pto.vreg<128xui16>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
-// CHECK-DAG: %[[SHR1:.*]] = pto.vshr %[[VALUE1]], %[[AMOUNT1]], {{.*}} : !pto.vreg<128xui16>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
-// CHECK: return %[[SHR0]], %[[SHR1]]
-// CHECK-NOT: pto.vmi.
-// CHECK-NOT: !pto.vmi.
-// CHECK-NOT: unrealized_conversion_cast
+// LEGACY-LABEL: func.func @vmi_to_vpto_shrui(
+// LEGACY: pto.vmi.shrui
+// LEGACY-NOT: pto.vmi.shrsi
+
+// LOWER-LABEL: func.func @vmi_to_vpto_shrui(
+// LOWER-SAME: %[[VALUE0:[^,]+]]: !pto.vreg<128xui16>
+// LOWER-SAME: %[[VALUE1:[^,]+]]: !pto.vreg<128xui16>
+// LOWER-SAME: %[[AMOUNT0:[^,]+]]: !pto.vreg<128xui16>
+// LOWER-SAME: %[[AMOUNT1:[^)]+]]: !pto.vreg<128xui16>
+// LOWER-SAME: -> (!pto.vreg<128xui16>, !pto.vreg<128xui16>)
+// LOWER-DAG: %[[SHR0:.*]] = pto.vshr %[[VALUE0]], %[[AMOUNT0]], {{.*}} : !pto.vreg<128xui16>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+// LOWER-DAG: %[[SHR1:.*]] = pto.vshr %[[VALUE1]], %[[AMOUNT1]], {{.*}} : !pto.vreg<128xui16>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+// LOWER: return %[[SHR0]], %[[SHR1]]
+// LOWER-NOT: pto.vmi.
+// LOWER-NOT: !pto.vmi.
+// LOWER-NOT: unrealized_conversion_cast

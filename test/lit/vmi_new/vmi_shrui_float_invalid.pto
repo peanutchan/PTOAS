@@ -19,4 +19,4 @@ module {
   }
 }
 
-// CHECK: 'pto.vmi.vshr' op requires signless or unsigned integer VMI element type
+// CHECK: 'pto.vmi.vshr' op requires integer VMI element type
