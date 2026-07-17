@@ -802,13 +802,11 @@ LogicalResult VMIVRegType::verify(function_ref<InFlightDiagnostic()> emitError,
                        << formatVMIVRegType(elementCount, elementType, layout)
                        << "' expected an 8-bit, 16-bit, or 32-bit logical "
                           "element type";
-  if (pto::isPTOFloat4PackedType(elementType))
-    return emitError()
-           << "'" << formatVMIVRegType(elementCount, elementType, layout)
-           << "' uses a packed FP4 physical pair type as a VMI logical "
-              "element type; packed FP4 input/output is not a supported VMI "
-              "surface because the logical FP4 lane count and physical packed "
-              "byte count are ambiguous";
+  if (pto::isPTOFloat4PackedType(elementType)) {
+    // FP4 types (f4E1M2x2, f4E2M1x2) are treated as 8-bit packed-pair
+    // elements at the VMI level; the physical layer resolves lane vs.
+    // value ambiguity through the part mechanism (Packed4).
+  }
 
   if (layout && !mlir::isa<VMILayoutAttr>(layout))
     return emitError() << "'"
@@ -1679,6 +1677,12 @@ LogicalResult VMITruncFOp::verify() {
         rounding != "Z")
       return emitOpError("rounding attr must be R, A, H, or Z");
   }
+  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+  if (!satAttr)
+    return emitOpError("'saturate' attribute is required (SAT or NOSAT)");
+  StringRef satVal = satAttr.getValue();
+  if (satVal != "SAT" && satVal != "NOSAT")
+    return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
   return success();
 }
 
@@ -1695,6 +1699,12 @@ LogicalResult VMIFPToSIOp::verify() {
                        "type");
   if (getVMIElementBitWidth(resultType.getElementType()) != 32)
     return emitOpError("requires 32-bit integer result element type");
+  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+  if (!satAttr)
+    return emitOpError("'saturate' attribute is required (SAT or NOSAT)");
+  StringRef satVal = satAttr.getValue();
+  if (satVal != "SAT" && satVal != "NOSAT")
+    return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
   return success();
 }
 
@@ -1763,6 +1773,12 @@ LogicalResult VMITruncIOp::verify() {
       getVMIElementBitWidth(resultType.getElementType()))
     return emitOpError(
         "requires result element type to be narrower than source element type");
+  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+  if (!satAttr)
+    return emitOpError("'saturate' attribute is required (SAT or NOSAT)");
+  StringRef satVal = satAttr.getValue();
+  if (satVal != "SAT" && satVal != "NOSAT")
+    return emitOpError("saturate attr must be 'SAT' or 'NOSAT'");
   return success();
 }
 
@@ -3393,12 +3409,21 @@ LogicalResult VMICvtOp::verify() {
   }
 
   // --- saturate ---
-  if (auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate")) {
-    if (dir != CvtDirection::FpNarrow && dir != CvtDirection::IntNarrow)
-      return emitOpError("'saturate' attribute is only valid for "
-                         "narrowing conversions (fp or int)");
-    if (satAttr.getValue() != "SAT")
-      return emitOpError("saturate must be 'SAT'");
+  auto satAttr = (*this)->getAttrOfType<StringAttr>("saturate");
+  bool needSat = (dir == CvtDirection::FpNarrow ||
+                  dir == CvtDirection::IntNarrow ||
+                  dir == CvtDirection::FpToSi);
+  if (needSat) {
+    if (!satAttr)
+      return emitOpError("'saturate' attribute is required for fp-narrow / "
+                         "int-narrow / fp-to-si conversions; write 'SAT' or "
+                         "'NOSAT'");
+    StringRef satVal = satAttr.getValue();
+    if (satVal != "SAT" && satVal != "NOSAT")
+      return emitOpError("saturate must be 'SAT' or 'NOSAT'");
+  } else if (satAttr) {
+    return emitOpError("'saturate' attribute is only valid for fp-narrow / "
+                       "int-narrow / fp-to-si conversions");
   }
 
   // --- sign ---

@@ -158,6 +158,15 @@ StringRef getTruncFRoundMode(VMITruncFOp op, Type resultElementType) {
   return getTruncFRoundModeForResult(resultElementType);
 }
 
+/// Resolve the saturate attr for a legacy VMI cast op.  The verifier
+/// guarantees that the op carries an explicit "SAT" or "NOSAT".
+/// "NOSAT" maps to VPTO-side null (sat absent).
+static StringAttr resolveSat(Operation *op, OpBuilder &b) {
+  auto s = op->getAttrOfType<StringAttr>("saturate");
+  assert(s && "verifier guarantees saturate is present");
+  return s.getValue() == "SAT" ? b.getStringAttr("SAT") : nullptr;
+}
+
 bool isLayoutAssignedVMIType(Type type) {
   if (auto vregType = dyn_cast<VMIVRegType>(type))
     return static_cast<bool>(vregType.getLayoutAttr());
@@ -9873,7 +9882,7 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
       if (failed(activeSlotMask))
         return rewriter.notifyMatchFailure(
             op, "failed to build group-slot truncf active slot mask");
-      StringAttr sat = rewriter.getStringAttr("SAT");
+      StringAttr sat = resolveSat(op, rewriter);
       for (auto [sourcePart, physicalResultType] :
            llvm::zip_equal(sourceParts, resultTypes)) {
         auto sourceType = dyn_cast<VRegType>(sourcePart.getType());
@@ -9909,14 +9918,21 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
       return rewriter.notifyMatchFailure(op, "truncf requires result chunks");
 
     auto sourceType0 = dyn_cast<VRegType>(sourceParts.front().getType());
-    if (!sourceType0 || !sourceType0.getElementType().isF32())
+    if (!sourceType0 || !isa<FloatType>(sourceType0.getElementType()))
+      return rewriter.notifyMatchFailure(op, "unsupported physical truncf source type");
+    unsigned sourceBits = pto::getPTOStorageElemBitWidth(sourceType0.getElementType());
+    if (sourceBits != 32 && sourceBits != 16)
       return rewriter.notifyMatchFailure(
-          op, "unsupported physical truncf source/result type");
+          op, "truncf source bit width must be 32 or 16");
+    // Group-slot layout for non-f32 sources is not supported yet.
+    if (sourceLayout && sourceLayout.isGroupSlots())
+      return rewriter.notifyMatchFailure(
+          op, "group-slot layout for non-f32 truncf not supported");
     for (Value sourcePart : sourceParts) {
       auto sourceType = dyn_cast<VRegType>(sourcePart.getType());
       if (!sourceType || sourceType != sourceType0)
         return rewriter.notifyMatchFailure(
-            op, "truncf source physical parts must have matching f32 type");
+            op, "truncf source physical parts must have matching type");
     }
 
     SmallVector<VRegType> resultVRegTypes;
@@ -9939,10 +9955,16 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
         resultLayout.getLaneStride() != 1 &&
         sourceParts.size() == resultTypes.size()) {
       StringRef part;
+      bool isF4 = isa<pto::F4E1M2x2Type, pto::F4E2M1x2Type>(
+          resultVRegTypes.front().getElementType());
       if (resultBits == 16 && resultLayout.getLaneStride() == 2)
-        part = "EVEN";
-      else if (resultBits == 8 && resultLayout.getLaneStride() == 4)
-        part = "P0";
+        part = "EVEN";                                          // 32→16
+      else if (resultBits == 8 && resultLayout.getLaneStride() == 4 && !isF4)
+        part = "P0";                                            // 32→8 (f8/hif8)
+      else if (resultBits == 8 && resultLayout.getLaneStride() == 2 && !isF4)
+        part = "EVEN";                                          // 16→8 (新增)
+      else if (isF4 && resultLayout.getLaneStride() == 4)
+        part = "P0";                                            // bf16→f4* Packed4
       else
         return rewriter.notifyMatchFailure(
             op, "unsupported dense lane_stride truncf result layout");
@@ -9954,7 +9976,7 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
 
       StringAttr rnd = rewriter.getStringAttr(
           getTruncFRoundMode(op, resultVRegTypes.front().getElementType()));
-      StringAttr sat = rewriter.getStringAttr("SAT");
+      StringAttr sat = resolveSat(op, rewriter);
       StringAttr partAttr = rewriter.getStringAttr(part);
       SmallVector<Value> results;
       results.reserve(resultTypes.size());
@@ -9972,11 +9994,20 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
 
     ArrayRef<StringRef> allParts;
     int64_t factor = 0;
-    if (resultBits == 16) {
+    Type dstElem = resultVRegTypes.front().getElementType();
+    bool isF4Dst = isa<pto::F4E1M2x2Type, pto::F4E2M1x2Type>(dstElem);
+    if (isF4Dst) {
+      // bf16→f4*: contract requires Packed4 (4×4bit packed into 32bit).
+      static constexpr StringRef kPacked4Parts[] = {"P0", "P1", "P2", "P3"};
+      allParts = kPacked4Parts;
+      factor = 4;
+    } else if (resultBits * 2 == sourceBits) {
+      // 32→16 or 16→8: EvenOdd.
       static constexpr StringRef kEvenOddParts[] = {"EVEN", "ODD"};
       allParts = kEvenOddParts;
       factor = 2;
-    } else if (resultBits == 8) {
+    } else if (resultBits * 4 == sourceBits) {
+      // 32→8: Packed4.
       static constexpr StringRef kPacked4Parts[] = {"P0", "P1", "P2", "P3"};
       allParts = kPacked4Parts;
       factor = 4;
@@ -10003,7 +10034,7 @@ struct OneToNVMITruncFOpPattern : OpConversionPattern<VMITruncFOp> {
 
     StringAttr rnd = rewriter.getStringAttr(
         getTruncFRoundMode(op, resultVRegTypes.front().getElementType()));
-    StringAttr sat = rewriter.getStringAttr("SAT");
+    StringAttr sat = resolveSat(op, rewriter);
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
     for (auto [chunkIndex, resultType] : llvm::enumerate(resultVRegTypes)) {
@@ -10350,7 +10381,7 @@ struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
 
       SmallVector<Value> results;
       results.reserve(resultTypes.size());
-      StringAttr sat = rewriter.getStringAttr("SAT");
+      StringAttr sat = resolveSat(op, rewriter);
       const char *activeSlotPattern =
           sourceLayout.getSlots() == 1 ? "PAT_VL1" : "PAT_VL8";
       StringRef activeSlotGranularity = sourceLogicalBits == 16 ? "b16" : "b32";
@@ -10458,7 +10489,7 @@ struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
       if (failed(sourceMask))
         return rewriter.notifyMatchFailure(op, "failed to build trunci masks");
 
-      StringAttr sat = rewriter.getStringAttr("SAT");
+      StringAttr sat = resolveSat(op, rewriter);
       SmallVector<Value> results;
       results.reserve(resultTypes.size());
       for (auto [sourcePart, resultType] :
@@ -10497,7 +10528,7 @@ struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
     if (failed(sourceMask) || failed(resultMask))
       return rewriter.notifyMatchFailure(op, "failed to build trunci masks");
 
-    StringAttr sat = rewriter.getStringAttr("SAT");
+    StringAttr sat = resolveSat(op, rewriter);
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
     for (int64_t resultIndex = 0, resultCount = resultTypes.size();
@@ -10548,7 +10579,7 @@ struct OneToNVMIFPToSIOpPattern : OpConversionPattern<VMIFPToSIOp> {
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
     StringAttr rnd = rewriter.getStringAttr("R");
-    StringAttr sat = rewriter.getStringAttr("SAT");
+    StringAttr sat = resolveSat(op, rewriter);
     for (auto [sourcePart, resultType] :
          llvm::zip_equal(sourceParts, resultTypes)) {
       auto sourceType = dyn_cast<VRegType>(sourcePart.getType());
@@ -12509,11 +12540,10 @@ verifySupportedVMIToVPTOOps(ModuleOp module,
 
       truncf.emitError()
           << kVMIDiagUnsupportedPrefix
-          << "pto.vmi.truncf supports only f32 deinterleaved=2 source parts "
-             "to dense f16 results, f32 source layouts whose factor times the "
-             "result lane_stride matches the fp8-like narrowing factor, or f32 "
-             "group_slots(num_groups=G, slots=1) to f16 "
-             "group_slots(num_groups=G, slots=1) ("
+          << "pto.vmi.truncf supports f32/f16/bf16 source narrowing (dense "
+             "EvenOdd, Packed4, or f32 group_slots(num_groups=G, slots=1) to "
+             "f16 group_slots(num_groups=G, slots=1)); non-f32 sources "
+             "currently require dense contiguous layouts ("
           << reason << ")";
       return WalkResult::interrupt();
     }

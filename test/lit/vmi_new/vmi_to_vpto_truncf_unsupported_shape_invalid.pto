@@ -11,13 +11,11 @@
 module {
   func.func @vmi_to_vpto_truncf_unsupported_shape_invalid(
       %input: !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>) {
-    %narrow = pto.vmi.vcvt %input
+    %narrow = pto.vmi.vcvt %input {saturate = "SAT"}
         : !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
         -> !pto.vmi.vreg<256xf16, #pto.vmi.layout<contiguous>>
     return
   }
 }
 
-// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.truncf supports only f32 deinterleaved=2 source parts
-// CHECK-SAME: dense f16 results
-// CHECK-SAME: f32 source layouts whose factor times the result lane_stride matches the fp8-like narrowing factor
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} pto.vmi.truncf supports f32/f16/bf16 source narrowing

@@ -391,12 +391,38 @@ static constexpr GroupReduceLayoutPattern kGroupReduceLayoutPatterns[] = {
     {gbFull(4), d(4, 1), gs(1)},
 };
 
+/// Element-type predicate for cast layout patterns.  Orthogonal to
+/// storage bit width; used to disambiguate types that share the same
+/// storage size but have different physical part families (e.g. f4
+/// packed pairs vs f8/hif8 are both 8-bit storage but Packed4 vs
+/// EvenOdd respectively).
+enum class CastElemKindPattern : uint8_t {
+  Any = 0,
+  Packed4,     // matches isPTOFloat4PackedType (f4E1M2x2, f4E2M1x2)
+  NotPacked4,  // matches !isPTOFloat4PackedType
+};
+
+static bool matchesCastElemKindPattern(CastElemKindPattern pattern,
+                                       Type elementType) {
+  switch (pattern) {
+  case CastElemKindPattern::Any:
+    return true;
+  case CastElemKindPattern::Packed4:
+    return pto::isPTOFloat4PackedType(elementType);
+  case CastElemKindPattern::NotPacked4:
+    return !pto::isPTOFloat4PackedType(elementType);
+  }
+  llvm_unreachable("unknown cast element kind pattern");
+}
+
 struct PreferredCastLayoutPattern {
   ElementBitsPattern sourceBits;
   ElementBitsPattern resultBits;
   int64_t elementCount = 0; // 0 means the default row for this bit-width pair.
   LayoutPattern sourceLayout;
   LayoutPattern resultLayout;
+  CastElemKindPattern sourceKind = CastElemKindPattern::Any;
+  CastElemKindPattern resultKind = CastElemKindPattern::Any;
 };
 
 struct LegalCastLayoutPattern {
@@ -404,6 +430,8 @@ struct LegalCastLayoutPattern {
   ElementBitsPattern resultBits;
   LayoutPattern sourceLayout;
   LayoutPattern resultLayout;
+  CastElemKindPattern sourceKind = CastElemKindPattern::Any;
+  CastElemKindPattern resultKind = CastElemKindPattern::Any;
 };
 
 struct LegalMaskGranularityCastLayoutPattern {
@@ -435,7 +463,10 @@ static constexpr PreferredCastLayoutPattern kPreferredCastLayoutPatterns[] = {
     {bits<8>(), bits<16>(), 0, c(), d(2)},
     {bits<16>(), bits<32>(), 0, c(), d(2)},
     {bits<8>(), bits<32>(), 0, c(), d(4)},
-    {bits<16>(), bits<8>(), 0, d(2), c()},
+    {bits<16>(), bits<8>(), 0, d(2), c(),
+     CastElemKindPattern::Any, CastElemKindPattern::NotPacked4},
+    {bits<16>(), bits<8>(), 0, d(4), c(),
+     CastElemKindPattern::Any, CastElemKindPattern::Packed4},
     {bits<32>(), bits<16>(), 0, d(2), c()},
     {bits<32>(), bits<8>(), 0, d(4), c()},
 };
@@ -449,10 +480,16 @@ static constexpr LegalCastLayoutPattern kLegalCastLayoutPatterns[] = {
     {bits<16>(), bits<32>(), ls(2), c()},
     {bits<16>(), bits<32>(), d(2), d(4)},
 
-    // 2x narrowing.
-    {bits<16>(), bits<8>(), d(2), c()},
-    {bits<16>(), bits<8>(), c(), ls(2)},
-    {bits<16>(), bits<8>(), d(4), d(2)},
+    // 2x narrowing — non-f4 paths (f8 / hif8).
+    {bits<16>(), bits<8>(), d(2), c(),
+     CastElemKindPattern::Any, CastElemKindPattern::NotPacked4},
+    {bits<16>(), bits<8>(), c(), ls(2),
+     CastElemKindPattern::Any, CastElemKindPattern::NotPacked4},
+    {bits<16>(), bits<8>(), d(4), d(2),
+     CastElemKindPattern::Any, CastElemKindPattern::NotPacked4},
+    // 2x narrowing with Packed4 physical factor (e.g. bf16→f4*).
+    {bits<16>(), bits<8>(), d(4), c(),
+     CastElemKindPattern::Any, CastElemKindPattern::Packed4},
     {bits<32>(), bits<16>(), d(2), c()},
     {bits<32>(), bits<16>(), c(), ls(2)},
     {bits<32>(), bits<16>(), d(4), d(2)},
@@ -1382,6 +1419,11 @@ FailureOr<VMICastLayoutFact> VMILayoutSupport::getPreferredCastLayoutFact(
     if (!matchesElementBitsPattern(pattern.sourceBits, sourceBits) ||
         !matchesElementBitsPattern(pattern.resultBits, resultBits))
       continue;
+    if (!matchesCastElemKindPattern(pattern.sourceKind,
+                                    sourceType.getElementType()) ||
+        !matchesCastElemKindPattern(pattern.resultKind,
+                                    resultType.getElementType()))
+      continue;
     bool isExact = pattern.elementCount != 0;
     if (isExact && pattern.elementCount != elementCount)
       continue;
@@ -1435,6 +1477,11 @@ VMILayoutSupport::getCastLayoutFactsForLayout(VMIVRegType sourceType,
   for (const LegalCastLayoutPattern &pattern : kLegalCastLayoutPatterns) {
     if (!matchesElementBitsPattern(pattern.sourceBits, sourceBits) ||
         !matchesElementBitsPattern(pattern.resultBits, resultBits))
+      continue;
+    if (!matchesCastElemKindPattern(pattern.sourceKind,
+                                    sourceType.getElementType()) ||
+        !matchesCastElemKindPattern(pattern.resultKind,
+                                    resultType.getElementType()))
       continue;
 
     VMILayoutAttr sourceLayout = materializeLayoutPattern(
