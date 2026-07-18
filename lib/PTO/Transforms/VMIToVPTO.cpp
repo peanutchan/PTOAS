@@ -167,6 +167,21 @@ static StringAttr resolveSat(Operation *op, OpBuilder &b) {
   return s.getValue() == "SAT" ? b.getStringAttr("SAT") : nullptr;
 }
 
+static StringAttr resolveTruncISat(Operation *op, Type sourceElemType,
+                                   Type resultElemType, OpBuilder &b) {
+  auto s = op->getAttrOfType<StringAttr>("saturate");
+  assert(s && "verifier guarantees saturate is present");
+  if (s.getValue() == "SAT")
+    return b.getStringAttr("SAT");
+
+  auto sourceInt = dyn_cast<IntegerType>(sourceElemType);
+  auto resultInt = dyn_cast<IntegerType>(resultElemType);
+  bool signedS32ToS8 = sourceInt && resultInt && sourceInt.getWidth() == 32 &&
+                       resultInt.getWidth() == 8 && !sourceInt.isUnsigned() &&
+                       !resultInt.isUnsigned();
+  return signedS32ToS8 ? nullptr : b.getStringAttr("NOSAT");
+}
+
 bool isLayoutAssignedVMIType(Type type) {
   if (auto vregType = dyn_cast<VMIVRegType>(type))
     return static_cast<bool>(vregType.getLayoutAttr());
@@ -10381,7 +10396,6 @@ struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
 
       SmallVector<Value> results;
       results.reserve(resultTypes.size());
-      StringAttr sat = resolveSat(op, rewriter);
       const char *activeSlotPattern =
           sourceLayout.getSlots() == 1 ? "PAT_VL1" : "PAT_VL8";
       StringRef activeSlotGranularity = sourceLogicalBits == 16 ? "b16" : "b32";
@@ -10401,6 +10415,8 @@ struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
             !resultType)
           return rewriter.notifyMatchFailure(
               op, "unsupported group-slot trunci physical type");
+        StringAttr sat = resolveTruncISat(
+            op, sourceType.getElementType(), resultType.getElementType(), rewriter);
 
         if (supportsPackedU16ToU8GroupSlotTrunc) {
           results.push_back(rewriter
@@ -10489,11 +10505,14 @@ struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
       if (failed(sourceMask))
         return rewriter.notifyMatchFailure(op, "failed to build trunci masks");
 
-      StringAttr sat = resolveSat(op, rewriter);
       SmallVector<Value> results;
       results.reserve(resultTypes.size());
       for (auto [sourcePart, resultType] :
            llvm::zip_equal(sourceParts, resultTypes)) {
+        auto physicalResultType = cast<VRegType>(resultType);
+        StringAttr sat = resolveTruncISat(op, sourceType0.getElementType(),
+                                          physicalResultType.getElementType(),
+                                          rewriter);
         results.push_back(rewriter
                               .create<VcvtOp>(op.getLoc(), resultType,
                                               sourcePart, *sourceMask,
@@ -10528,12 +10547,15 @@ struct OneToNVMITruncIOpPattern : OpConversionPattern<VMITruncIOp> {
     if (failed(sourceMask) || failed(resultMask))
       return rewriter.notifyMatchFailure(op, "failed to build trunci masks");
 
-    StringAttr sat = resolveSat(op, rewriter);
     SmallVector<Value> results;
     results.reserve(resultTypes.size());
     for (int64_t resultIndex = 0, resultCount = resultTypes.size();
          resultIndex < resultCount; ++resultIndex) {
       Type resultType = resultTypes[resultIndex];
+      auto physicalResultType = cast<VRegType>(resultType);
+      StringAttr sat = resolveTruncISat(op, sourceType0.getElementType(),
+                                        physicalResultType.getElementType(),
+                                        rewriter);
       SmallVector<Value> partials;
       partials.reserve(parts.size());
       for (int64_t partIndex = 0; partIndex < factor; ++partIndex) {
