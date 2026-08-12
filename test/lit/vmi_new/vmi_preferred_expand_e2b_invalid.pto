@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto 2>&1 | FileCheck %s
+
+// preferred_expand=e2b with G=4 is illegal (E2B table requires G=8).
+
+module {
+  func.func @prefer_e2b_bad_g(
+      %src: !pto.ptr<f32, ub>, %off: index)
+      -> !pto.vmi.vreg<64xf32> {
+    %c1 = arith.constant 1 : index
+    %out = pto.vmi.group_broadcast_load %src[%off], %c1
+        {num_groups = 4, preferred_expand = "e2b"}
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+    return %out : !pto.vmi.vreg<64xf32>
+  }
+}
+
+// CHECK: failed to legalize operation 'pto.vmi.group_broadcast_load'
+// CHECK: preferred_expand = "e2b"

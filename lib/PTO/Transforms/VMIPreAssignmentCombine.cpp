@@ -97,7 +97,7 @@ static LogicalResult fuseGroupSlotBroadcastLoads(ModuleOp module) {
     auto fused = builder.create<VMIGroupBroadcastLoadOp>(
         broadcast.getLoc(), broadcast.getResult().getType(), load.getSource(),
         load.getOffset(), load.getSourceGroupStride(),
-        broadcast.getNumGroupsAttr());
+        broadcast.getNumGroupsAttr(), broadcast.getPreferredExpandAttr());
     broadcast.getResult().replaceAllUsesWith(fused.getResult());
     broadcast.erase();
     if (load->use_empty())

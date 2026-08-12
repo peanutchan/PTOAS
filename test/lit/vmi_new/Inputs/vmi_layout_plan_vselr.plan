@@ -1,0 +1,7 @@
+version: 1
+source: override
+preferred_expand: vselr
+group: 8
+materialize_boundary: false
+stage_split: false
+morphs: Compact(8) -> Expand(8,vselr) -> KeepLive

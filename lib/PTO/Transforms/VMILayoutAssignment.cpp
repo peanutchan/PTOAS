@@ -314,6 +314,25 @@ struct LayoutSolver {
     return getGroupSlotsLayout(numGroups);
   }
 
+  /// When Expand prefers vbrc, keep the compact carrier unpacked (slots=1)
+  /// so group_broadcast lowers via vdup rather than packed-group vselr.
+  VMILayoutAttr getGroupReduceResultLayoutForExpandPolicy(
+      Operation *op, VMIVRegType sourceType, int64_t numGroups,
+      VMILayoutAttr fallback) {
+    if (resolvePreferredExpand(op) != VMIPreferredExpand::Vbrc)
+      return fallback;
+    VMILayoutAttr vbrcLayout =
+        VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/1);
+    VMILayoutSupport supports;
+    FailureOr<SmallVector<VMIGroupReduceLayoutFact, 4>> facts =
+        supports.getGroupReduceLayoutFactsForLayout(
+            sourceType, numGroups, VMIGroupReduceLayoutPort::Result,
+            vbrcLayout);
+    if (succeeded(facts))
+      return vbrcLayout;
+    return fallback;
+  }
+
   VMILayoutAttr getPreferredGroupReduceSourceLayout(VMIVRegType type,
                                                     int64_t numGroups) {
     if (VMILayoutAttr existing = type.getLayoutAttr())
@@ -364,9 +383,7 @@ struct LayoutSolver {
 
     VMILayoutSupport supports;
     FailureOr<VMIGroupBroadcastLoadDirectFact> fact =
-        supports.getGroupBroadcastLoadDirectFact(
-            type, op.getSource().getType(), op.getSourceGroupStride(),
-            op.getNumGroupsAttr().getInt());
+        supports.getGroupBroadcastLoadDirectFact(op);
     if (failed(fact))
       return {};
     return fact->layout.resultLayout;
@@ -374,16 +391,21 @@ struct LayoutSolver {
 
   bool hasDirectGroupBroadcastLoadCandidate(VMIGroupBroadcastLoadOp op) {
     VMILayoutSupport supports;
-    return succeeded(supports.getGroupBroadcastLoadDirectFact(
-        cast<VMIVRegType>(op.getResult().getType()), op.getSource().getType(),
-        op.getSourceGroupStride(), op.getNumGroupsAttr().getInt()));
+    return succeeded(supports.getGroupBroadcastLoadDirectFact(op));
   }
 
   VMILayoutAttr getPreferredGroupBroadcastSourceLayout(Value value,
-                                                       int64_t numGroups) {
+                                                       int64_t numGroups,
+                                                       Operation *broadcastOp) {
     auto type = dyn_cast<VMIVRegType>(value.getType());
     if (!type)
       return getContiguousLayout();
+    VMIPreferredExpand preferred = resolvePreferredExpand(broadcastOp);
+    if (preferred == VMIPreferredExpand::Vbrc)
+      // The algebra contract is an explicit use-site policy and therefore
+      // outranks layouts propagated from plastic producers. Assignment may
+      // materialize the use conversion when the producer has another layout.
+      return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/1);
     if (VMILayoutAttr existing = type.getLayoutAttr())
       if (existing.isGroupSlots() && existing.getSlots() > 0)
         return existing;
@@ -391,12 +413,14 @@ struct LayoutSolver {
     if (solved && solved.isGroupSlots() && solved.getNumGroups() == numGroups &&
         solved.getSlots() > 0)
       return solved;
-    if (type.getElementCount() == numGroups)
+    if (type.getElementCount() == numGroups) {
       // Prefer the packed carrier for plastic producers, including partial
       // packets with fewer than eight groups.  This keeps the broadcast on
       // the single-source vselr path; explicit or otherwise fixed slots=1
       // values retain their layout and use the cross-source fallback.
+      // preferred_expand=vselr keeps this bias; vbrc already handled above.
       return VMILayoutAttr::getGroupSlots(ctx, numGroups, /*slots=*/8);
+    }
     if (auto load = value.getDefiningOp<VMIGroupSlotLoadOp>())
       return getPreferredGroupSlotLoadLayout(load);
     return getPreferredGroupSlotsLayout(type, numGroups);
@@ -961,9 +985,11 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         if (failed(setNaturalLayout(
                 reduce.getResult(),
-                succeeded(fact)
-                    ? fact->resultLayout
-                    : getPreferredGroupSlotsLayout(resultType, numGroups),
+                getGroupReduceResultLayoutForExpandPolicy(
+                    op, sourceType, numGroups,
+                    succeeded(fact)
+                        ? fact->resultLayout
+                        : getPreferredGroupSlotsLayout(resultType, numGroups)),
                 op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -988,9 +1014,11 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         if (failed(setNaturalLayout(
                 reduce.getResult(),
-                succeeded(fact)
-                    ? fact->resultLayout
-                    : getPreferredGroupSlotsLayout(resultType, numGroups),
+                getGroupReduceResultLayoutForExpandPolicy(
+                    op, sourceType, numGroups,
+                    succeeded(fact)
+                        ? fact->resultLayout
+                        : getPreferredGroupSlotsLayout(resultType, numGroups)),
                 op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -1015,9 +1043,11 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         if (failed(setNaturalLayout(
                 reduce.getResult(),
-                succeeded(fact)
-                    ? fact->resultLayout
-                    : getPreferredGroupSlotsLayout(resultType, numGroups),
+                getGroupReduceResultLayoutForExpandPolicy(
+                    op, sourceType, numGroups,
+                    succeeded(fact)
+                        ? fact->resultLayout
+                        : getPreferredGroupSlotsLayout(resultType, numGroups)),
                 op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -1042,9 +1072,11 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         if (failed(setNaturalLayout(
                 reduce.getResult(),
-                succeeded(fact)
-                    ? fact->resultLayout
-                    : getPreferredGroupSlotsLayout(resultType, numGroups),
+                getGroupReduceResultLayoutForExpandPolicy(
+                    op, sourceType, numGroups,
+                    succeeded(fact)
+                        ? fact->resultLayout
+                        : getPreferredGroupSlotsLayout(resultType, numGroups)),
                 op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -1069,9 +1101,11 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         if (failed(setNaturalLayout(
                 reduce.getResult(),
-                succeeded(fact)
-                    ? fact->resultLayout
-                    : getPreferredGroupSlotsLayout(resultType, numGroups),
+                getGroupReduceResultLayoutForExpandPolicy(
+                    op, sourceType, numGroups,
+                    succeeded(fact)
+                        ? fact->resultLayout
+                        : getPreferredGroupSlotsLayout(resultType, numGroups)),
                 op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();
         return WalkResult::advance();
@@ -1096,19 +1130,26 @@ struct LayoutSolver {
           return WalkResult::interrupt();
         if (failed(setNaturalLayout(
                 reduce.getResult(),
-                succeeded(fact)
-                    ? fact->resultLayout
-                    : getPreferredGroupSlotsLayout(resultType, numGroups),
+                getGroupReduceResultLayoutForExpandPolicy(
+                    op, sourceType, numGroups,
+                    succeeded(fact)
+                        ? fact->resultLayout
+                        : getPreferredGroupSlotsLayout(resultType, numGroups)),
                 op, DataLayoutSeedPhase::Reduce)))
           return WalkResult::interrupt();
         return WalkResult::advance();
       }
       if (auto broadcast = dyn_cast<VMIGroupBroadcastOp>(op)) {
+        // preferred_expand=vbrc is a hard use-site policy: apply after soft
+        // seeds so packed slots=8 from Reduce cannot win via canUseOperandLayout.
+        bool forceVbrc =
+            resolvePreferredExpand(broadcast) == VMIPreferredExpand::Vbrc;
         requestDataUse(
             broadcast.getSourceMutable(),
             getPreferredGroupBroadcastSourceLayout(
-                broadcast.getSource(), broadcast.getNumGroupsAttr().getInt()),
-            /*late=*/false, DataLayoutSeedPhase::GroupBroadcast);
+                broadcast.getSource(), broadcast.getNumGroupsAttr().getInt(),
+                broadcast),
+            /*late=*/forceVbrc, DataLayoutSeedPhase::GroupBroadcast);
         if (failed(setPreferredLayout(
                 broadcast.getResult(),
                 getPreferredGroupBroadcastResultLayout(broadcast), op,

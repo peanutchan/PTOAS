@@ -38,11 +38,41 @@
 #include "PTO/IR/VMIUtils.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/CommandLine.h"
 
 using namespace mlir;
 using namespace mlir::pto;
+
+std::optional<VMIPreferredExpand> mlir::pto::parsePreferredExpand(StringRef value) {
+  if (value == "brc")
+    return VMIPreferredExpand::Brc;
+  if (value == "e2b")
+    return VMIPreferredExpand::E2b;
+  if (value == "vbrc")
+    return VMIPreferredExpand::Vbrc;
+  if (value == "vselr")
+    return VMIPreferredExpand::Vselr;
+  return std::nullopt;
+}
+
+VMIPreferredExpand mlir::pto::resolvePreferredExpand(Operation *op) {
+  if (!op)
+    return VMIPreferredExpand::None;
+  if (auto attr = op->getAttrOfType<StringAttr>("preferred_expand")) {
+    if (auto parsed = parsePreferredExpand(attr.getValue()))
+      return *parsed;
+  }
+  if (auto module = op->getParentOfType<ModuleOp>()) {
+    if (auto attr =
+            module->getAttrOfType<StringAttr>("pto.vmi.preferred_expand")) {
+      if (auto parsed = parsePreferredExpand(attr.getValue()))
+        return *parsed;
+    }
+  }
+  return VMIPreferredExpand::None;
+}
 
 namespace {
 
@@ -402,8 +432,14 @@ static constexpr GroupReduceLayoutPattern kGroupReduceLayoutPatterns[] = {
     {gb(1), c(), gs(8)},
     {gb(2), d(2), gs(8)},
     {gb(2), bd(2), gs(8)},
+    // preferred_expand=vbrc KeepLive paths need an unpacked carrier so
+    // group_broadcast can lower via vdup (+ lane merge) instead of vselr.
+    {gb(2), d(2), gs(1)},
+    {gb(2), bd(2), gs(1)},
     {gb(4), d(4), gs(8)},
     {gb(4), bd(4), gs(8)},
+    {gb(4), d(4), gs(1)},
+    {gb(4), bd(4), gs(1)},
     {gbFull(), c(), gs(1)},
     {gbFull(2), d(2), gs(1)},
     {gbFull(4), d(4), gs(1)},
@@ -784,10 +820,14 @@ static constexpr GroupBroadcastLayoutPattern kGroupBroadcastLayoutPatterns[] = {
     {gb(2), gs(8), bd(2)},
     // bf16 G=4 on L=128: groupSize=32 = two 32B blocks; slots=1 source.
     {gb(2), gs(1), c()},
+    {gb(2), gs(1), d(2)},
+    {gb(2), gs(1), bd(2)},
     {gb(4), gs(8), c()},
     {gb(4), gs(8), d(4)},
     {gb(4), gs(8), bd(4)},
     {gb(4), gs(1), c()},
+    {gb(4), gs(1), d(4)},
+    {gb(4), gs(1), bd(4)},
     {gbFull(), gs(8), c()},
     {gbFull(), gs(1), c()},
     {gbFull(2), gs(1), d(2)},
@@ -1517,19 +1557,28 @@ VMILayoutSupport::getGroupBroadcastLoadDirectFact(VMIGroupBroadcastLoadOp op,
                                                   std::string *reason) const {
   return getGroupBroadcastLoadDirectFact(
       cast<VMIVRegType>(op.getResult().getType()), op.getSource().getType(),
-      op.getSourceGroupStride(), op.getNumGroupsAttr().getInt(), reason);
+      op.getSourceGroupStride(), op.getNumGroupsAttr().getInt(), reason,
+      resolvePreferredExpand(op));
 }
 
 FailureOr<VMIGroupBroadcastLoadDirectFact>
 VMILayoutSupport::getGroupBroadcastLoadDirectFact(
     VMIVRegType resultType, Type sourceType, Value sourceGroupStride,
-    int64_t numGroups, std::string *reason) const {
+    int64_t numGroups, std::string *reason,
+    VMIPreferredExpand preferred) const {
   auto fail =
       [&](const Twine &message) -> FailureOr<VMIGroupBroadcastLoadDirectFact> {
     if (reason)
       *reason = message.str();
     return failure();
   };
+
+  if (preferred == VMIPreferredExpand::Vselr)
+    return fail("preferred_expand=vselr disables direct group_broadcast_load "
+                "lowering");
+  if (preferred == VMIPreferredExpand::Vbrc)
+    return fail("preferred_expand=vbrc is not valid on group_broadcast_load "
+                "(use group_broadcast / vbrc)");
 
   if (!isa<PtrType>(sourceType))
     return fail("group_broadcast_load direct lowering requires !pto.ptr source");
@@ -1551,6 +1600,12 @@ VMILayoutSupport::getGroupBroadcastLoadDirectFact(
   VMILayoutAttr existing = resultType.getLayoutAttr();
   for (const GroupBroadcastLoadDirectPattern &pattern :
        kGroupBroadcastLoadDirectPatterns) {
+    if (preferred == VMIPreferredExpand::E2b &&
+        pattern.kind != VMIGroupBroadcastLoadDirectKind::E2B)
+      continue;
+    if (preferred == VMIPreferredExpand::Brc &&
+        pattern.kind != VMIGroupBroadcastLoadDirectKind::BRC)
+      continue;
     if (!matchesElementCountPattern(pattern.numGroups, numGroups))
       continue;
     if (!matchesGroupBlockPattern(pattern.block, *key))
@@ -1575,6 +1630,10 @@ VMILayoutSupport::getGroupBroadcastLoadDirectFact(
             static_cast<int64_t>(elementBits)}};
   }
 
+  if (preferred == VMIPreferredExpand::E2b)
+    return fail("preferred_expand=e2b has no matching direct E2B table row");
+  if (preferred == VMIPreferredExpand::Brc)
+    return fail("preferred_expand=brc has no matching direct BRC table row");
   return fail("group_broadcast_load has no preferred direct lowering layout "
               "table row");
 }

@@ -1138,6 +1138,33 @@ def VMILowerUnifiedToLegacy : Pass<"vmi-lower-unified-to-legacy", "ModuleOp"> {
   let dependentDialects = ["mlir::pto::PTODialect"];
 }
 
+def VMIInferLayoutPlan : Pass<"vmi-infer-layout-plan", "ModuleOp"> {
+  let summary = "Infer a structured VMI layout plan from unified VMI";
+  let description = [{
+    Walks unified VMI and stamps `pto.vmi.layout_plan` describing Compact /
+    Expand / MaterializeBoundary / Pack obligations. Does not rewrite ops.
+    An existing `source = "override"` plan is preserved.
+  }];
+  let constructor = "mlir::pto::createVMIInferLayoutPlanPass()";
+  let dependentDialects = ["mlir::func::FuncDialect", "mlir::pto::PTODialect"];
+}
+
+def VMIApplyLayoutPlan : Pass<"vmi-apply-layout-plan", "ModuleOp"> {
+  let summary = "Apply `pto.vmi.layout_plan` to unified VMI before assignment";
+  let description = [{
+    Validates the module layout plan against VMI facts, then:
+      * MaterializeBoundary + Expand(e2b|brc): rewrite matching grouped
+        `vbrc` whose compact source was group-stored into
+        `vload {dist_mode=brc, preferred_expand=...}`
+      * Expand(vbrc|vselr): attach `preferred_expand` to grouped `vbrc`
+    Stamps module `pto.vmi.preferred_expand` for assignment/lowering.
+  }];
+  let constructor = "mlir::pto::createVMIApplyLayoutPlanPass()";
+  let dependentDialects = ["mlir::arith::ArithDialect",
+                           "mlir::func::FuncDialect",
+                           "mlir::pto::PTODialect"];
+}
+
 def VMIToVPTO : Pass<"vmi-to-vpto", "ModuleOp"> {
   let summary = "Convert layout-assigned VMI IR to physical VPTO IR";
   let description = [{

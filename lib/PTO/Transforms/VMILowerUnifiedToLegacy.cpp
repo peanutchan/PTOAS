@@ -441,7 +441,7 @@ static LogicalResult lowerVLoad(VMIvLoadOp op, OpBuilder &builder) {
   //   elementCount  > num_groups → group_load (full groups)
   // Broadcast-style slot loads (dense output, stride=1) should be decomposed
   // at the VMI level: vload(compact) + vbrc.
-  if (op.getGroupAttr()) {
+    if (op.getGroupAttr()) {
     auto resultType = cast<VMIVRegType>(op.getResults().front().getType());
     int64_t numGroups = op.getGroupAttr().getInt();
     // {group, dist_mode="brc"}: group broadcast — one scalar per group
@@ -449,7 +449,7 @@ static LogicalResult lowerVLoad(VMIvLoadOp op, OpBuilder &builder) {
     if (op.getDistMode() && op.getDistMode() == "brc") {
       auto gbl = builder.create<VMIGroupBroadcastLoadOp>(
           op->getLoc(), resultType, op.getSource(), op.getOffset(),
-          op.getStride(), op.getGroupAttr());
+          op.getStride(), op.getGroupAttr(), op.getPreferredExpandAttr());
       op.getResults().front().replaceAllUsesWith(gbl.getResult());
     } else if (resultType.getElementCount() == numGroups) {
       auto slotLoad = builder.create<VMIGroupSlotLoadOp>(
@@ -541,14 +541,14 @@ static LogicalResult lowerVLoad(VMIvLoadOp op, OpBuilder &builder) {
       Value stride = op.getStride();
       auto gbl = builder.create<VMIGroupBroadcastLoadOp>(
           loc, resultType, source, offset, stride,
-          builder.getI64IntegerAttr(numGroups));
+          builder.getI64IntegerAttr(numGroups), op.getPreferredExpandAttr());
       op.getResults().front().replaceAllUsesWith(gbl.getResult());
     } else {
       Value zeroStride = builder.create<arith::ConstantOp>(
           loc, builder.getIndexType(), builder.getIndexAttr(0));
       auto gbl = builder.create<VMIGroupBroadcastLoadOp>(
           loc, resultType, source, offset, zeroStride,
-          builder.getI64IntegerAttr(1));
+          builder.getI64IntegerAttr(1), op.getPreferredExpandAttr());
       op.getResults().front().replaceAllUsesWith(gbl.getResult());
     }
   } else {
@@ -1230,11 +1230,10 @@ void VMILowerUnifiedToLegacyPass::runOnOperation() {
       builder.setInsertionPoint(op);
       Value result;
       if (vop.getGroupAttr()) {
-        result =
-            builder
-                .create<VMIGroupBroadcastOp>(op->getLoc(), vop.getResult().getType(),
-                                             vop.getValue(), vop.getGroupAttr())
-                .getResult();
+        auto gb = builder.create<VMIGroupBroadcastOp>(
+            op->getLoc(), vop.getResult().getType(), vop.getValue(),
+            vop.getGroupAttr(), vop.getPreferredExpandAttr());
+        result = gb.getResult();
       } else {
         result =
             builder

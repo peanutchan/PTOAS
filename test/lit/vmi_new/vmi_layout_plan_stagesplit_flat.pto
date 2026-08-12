@@ -1,0 +1,49 @@
+// RUN: pto-test-opt %s -vmi-apply-layout-plan | FileCheck %s
+
+// Flat func body (no pto.vecscope) — DSL-style VMI. StageSplit must invent VF0/membar/VF1.
+
+module attributes {
+  pto.vmi.layout_plan = {
+    version = 1 : i64,
+    source = "override",
+    preferred_expand = "e2b",
+    group = 8 : i64,
+    materialize_boundary = true,
+    stage_split = true,
+    residency = "materialize",
+    materialize_scope = "stage",
+    morphs = ["Compact(8)", "StageSplit", "MaterializeBoundary@stage", "Expand(8,e2b)"]
+  }
+} {
+  func.func @stage_split_flat(
+      %src: !pto.ptr<f32, ub>, %scale_ub: !pto.ptr<f32, ub>,
+      %off: index) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c64 = arith.constant 64 : index
+    %mask = pto.vmi.create_mask %c64 : index -> !pto.vmi.mask<64xpred>
+    %x = pto.vmi.vload %src[%off]
+        : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+    %amax = pto.vmi.vcmax %x, %mask {group = 8}
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.mask<64xpred>
+        -> !pto.vmi.vreg<8xf32>
+    pto.vmi.vstore %amax, %scale_ub[%c0], %c1 {group = 8}
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
+    %exp = pto.vmi.vbrc %amax {group = 8}
+        : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<64xf32>
+    %y = pto.vmi.vdiv %x, %exp
+        : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+        -> !pto.vmi.vreg<64xf32>
+    pto.vmi.vstore %y, %src[%off]
+        : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+    return
+  }
+}
+
+// CHECK: pto.vecscope
+// CHECK: pto.vmi.vstore
+// CHECK: pto.mem_bar "VST_VLD"
+// CHECK: pto.vecscope
+// CHECK: pto.vmi.vload
+// CHECK: preferred_expand = "e2b"
+// CHECK: return

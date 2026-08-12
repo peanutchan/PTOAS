@@ -534,8 +534,14 @@ def VMIGroupReduceMinIOp : VMI_Op<"group_reduce_mini"> {
 
 def VMIGroupBroadcastOp : VMI_Op<"group_broadcast"> {
   let summary = "VMI broadcast group-slot values back to each logical group";
+  let description = [{
+    Optional `{preferred_expand = "vselr"|"vbrc"}` selects the register expand
+    strategy for layout algebra / assignment (Phase 3). Memory expand strategies
+    (`brc`/`e2b`) belong on `group_broadcast_load`.
+  }];
   let arguments = (ins VMI_VRegTypeConstraint:$source,
-                       I64Attr:$num_groups);
+                       I64Attr:$num_groups,
+                       OptionalAttr<StrAttr>:$preferred_expand);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$source attr-dict `:` type($source) `->` type($result)";
@@ -671,8 +677,14 @@ def VMIGroupSlotLoadOp : VMI_Op<"group_slot_load", [DeclareOpInterfaceMethods<Me
 
 def VMIGroupBroadcastLoadOp : VMI_Op<"group_broadcast_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "VMI load one scalar value per logical group and broadcast it to group lanes";
+  let description = [{
+    Optional `{preferred_expand = "brc"|"e2b"|"vselr"}` selects the expand
+    strategy for layout algebra (Phase 3). `brc`/`e2b` prefer direct `vlds`
+    dists; `vselr` forces the slot-load + register-broadcast fallback.
+  }];
   let arguments = (ins PtrOrMemRef:$source, Index:$offset, Index:$source_group_stride,
-                       I64Attr:$num_groups);
+                       I64Attr:$num_groups,
+                       OptionalAttr<StrAttr>:$preferred_expand);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$source `[` $offset `]` `,` $source_group_stride attr-dict `:` type($source) `->` type($result)";
@@ -839,7 +851,8 @@ def VMIPackOp : VMI_Op<"pack"> {
 
 def VMIVbrcOp : VMI_Op<"vbrc", [Pure]> {
   let summary = "VMI broadcast: scalar/1-lane to vector, or group-slot to dense vector";
-  let arguments = (ins AnyType:$value, OptionalAttr<I64Attr>:$group);
+  let arguments = (ins AnyType:$value, OptionalAttr<I64Attr>:$group,
+                       OptionalAttr<StrAttr>:$preferred_expand);
   let results = (outs VMI_VRegTypeConstraint:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$value attr-dict `:` type($value) `->` type($result)";
@@ -1439,7 +1452,8 @@ def VMIvLoadOp : VMI_Op<"vload",
     Optional<I16>:$repeat_stride,
     OptionalAttr<StrAttr>:$dist_mode,
     OptionalAttr<I64Attr>:$group,
-    OptionalAttr<StrAttr>:$pmode
+    OptionalAttr<StrAttr>:$pmode,
+    OptionalAttr<StrAttr>:$preferred_expand
   );
   let results = (outs Variadic<VMI_VRegTypeConstraint>:$results);
   let hasCustomAssemblyFormat = 1;

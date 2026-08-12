@@ -8196,6 +8196,7 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
     SmallVector<Type> resultTypes = std::move(*maybe_resultTypes);
     FailureOr<VMIGroupBroadcastLoadDirectFact> directFact =
         supports.getGroupBroadcastLoadDirectFact(op);
+    VMIPreferredExpand preferred = resolvePreferredExpand(op);
     auto getBRCDist = [&]() -> std::optional<StringRef> {
       unsigned elementBits =
           pto::getPTOStorageElemBitWidth(resultVMIType.getElementType());
@@ -8208,7 +8209,10 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
       return std::nullopt;
     };
 
-    if (succeeded(directFact) &&
+    // preferred_expand=vselr forces the slot-load + register-broadcast fallback.
+    const bool forceVselr = preferred == VMIPreferredExpand::Vselr;
+
+    if (!forceVselr && succeeded(directFact) &&
         directFact->kind == VMIGroupBroadcastLoadDirectKind::BRC) {
       int64_t chunksPerGroup =
           directFact->layout.groupSize / directFact->layout.lanesPerPart;
@@ -8249,8 +8253,17 @@ struct OneToNVMIGroupBroadcastLoadOpPattern
       return success();
     }
 
-    if (failed(directFact) ||
+    if (forceVselr || failed(directFact) ||
         directFact->kind != VMIGroupBroadcastLoadDirectKind::E2B) {
+      if (!forceVselr &&
+          (preferred == VMIPreferredExpand::E2b ||
+           preferred == VMIPreferredExpand::Brc)) {
+        return rewriter.notifyMatchFailure(
+            op,
+            Twine("preferred_expand=") +
+                (preferred == VMIPreferredExpand::E2b ? "e2b" : "brc") +
+                " has no matching direct lowering for this shape");
+      }
       std::optional<int64_t> stride =
           getConstantIndexValue(op.getSourceGroupStride());
       int64_t slots = (stride && *stride == 1) ? 8 : 1;
@@ -9866,23 +9879,33 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
     }
 
     if (*plan == GroupReduceLoweringPlan::FourBlockDeinterleaved4VcgaddTree) {
-      int64_t resultPartCount = resultTypes.size();
-      if (static_cast<int64_t>(sourceParts.size()) != resultPartCount * 4 ||
+      VMILayoutAttr resultLayout = resultVMIType.getLayoutAttr();
+      bool slots1Result = resultLayout && resultLayout.isGroupSlots() &&
+                          resultLayout.getSlots() == 1;
+      int64_t numGroups = op.getNumGroupsAttr().getInt();
+      int64_t packedCols = slots1Result ? (numGroups + 7) / 8
+                                        : static_cast<int64_t>(resultTypes.size());
+      if (slots1Result) {
+        if (numGroups <= 0 ||
+            static_cast<int64_t>(resultTypes.size()) != numGroups)
+          return rewriter.notifyMatchFailure(
+              op, "four-block slots=1 group_reduce requires one result "
+                  "part per group");
+      }
+      if (static_cast<int64_t>(sourceParts.size()) != packedCols * 4 ||
           maskParts.size() != sourceParts.size())
         return rewriter.notifyMatchFailure(
             op, "four-block group_reduce arity mismatch");
 
-      SmallVector<Value> results;
-      results.reserve(resultPartCount);
+      SmallVector<Value> packedResults;
+      packedResults.reserve(packedCols);
       auto resultType = dyn_cast<VRegType>(resultTypes.front());
       auto maskType = dyn_cast<MaskType>(maskParts.front().getType());
       if (!resultType || !maskType)
         return rewriter.notifyMatchFailure(
             op, "four-block group_reduce requires physical vreg/mask");
-      int64_t numGroups = op.getNumGroupsAttr().getInt();
 
-      for (int64_t resultIndex = 0; resultIndex < resultPartCount;
-           ++resultIndex) {
+      for (int64_t resultIndex = 0; resultIndex < packedCols; ++resultIndex) {
         SmallVector<Value, 4> sources;
         SmallVector<Value, 4> masks;
         sources.reserve(4);
@@ -9890,12 +9913,10 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
         SmallVector<Value, 4> partials;
         partials.reserve(4);
         for (int64_t part = 0; part < 4; ++part) {
-          int64_t sourceIndex = part * resultPartCount + resultIndex;
+          int64_t sourceIndex = part * packedCols + resultIndex;
           Value source = sourceParts[sourceIndex];
           Value mask = maskParts[sourceIndex];
-          Type physicalResultType = resultTypes[resultIndex];
-          if (physicalResultType != resultType ||
-              source.getType() != resultType || mask.getType() != maskType)
+          if (source.getType() != resultType || mask.getType() != maskType)
             return rewriter.notifyMatchFailure(
                 op, "four-block group_reduce requires uniform physical "
                     "types");
@@ -9906,7 +9927,7 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
         FailureOr<Value> combined = combineEquivalentMaskedParts<CombineOpTy>(
             op.getLoc(), sources, masks, resultType, rewriter);
         if (succeeded(combined)) {
-          results.push_back(
+          packedResults.push_back(
               rewriter
                   .create<GroupReduceOpTy>(op.getLoc(), resultType, *combined,
                                            masks.front())
@@ -9936,13 +9957,62 @@ struct OneToNVMIGroupReduceOpPattern : OpConversionPattern<OpTy> {
                 .create<CombineOpTy>(op.getLoc(), resultType, partials[2],
                                      partials[3], *combineMask)
                 .getResult();
-        results.push_back(rewriter
-                              .create<CombineOpTy>(op.getLoc(), resultType,
-                                                   sum01, sum23, *combineMask)
-                              .getResult());
+        packedResults.push_back(
+            rewriter
+                .create<CombineOpTy>(op.getLoc(), resultType, sum01, sum23,
+                                     *combineMask)
+                .getResult());
       }
 
-      replaceOpWithFlatConvertedValues(rewriter, op, results, *this->getTypeConverter());
+      if (!slots1Result) {
+        if (static_cast<int64_t>(packedResults.size()) !=
+            static_cast<int64_t>(resultTypes.size()))
+          return rewriter.notifyMatchFailure(
+              op, "four-block group_reduce packed arity mismatch");
+        for (auto [packed, physicalResultType] :
+             llvm::zip_equal(packedResults, resultTypes)) {
+          if (physicalResultType != resultType)
+            return rewriter.notifyMatchFailure(
+                op, "four-block group_reduce requires uniform physical "
+                    "types");
+          (void)packed;
+        }
+        replaceOpWithFlatConvertedValues(rewriter, op, packedResults,
+                                         *this->getTypeConverter());
+        return success();
+      }
+
+      // preferred_expand=vbrc KeepLive needs an unpacked carrier: squeeze each
+      // packed group lane into its own slots=1 physical part (value at LOWEST).
+      FailureOr<int64_t> lanesPerPart =
+          getDataLanesPerPart(sourceVMIType.getElementType());
+      if (failed(lanesPerPart))
+        return rewriter.notifyMatchFailure(
+            op, "four-block slots=1 group_reduce requires known lanes/part");
+      SmallVector<Value> results(resultTypes.size());
+      for (int64_t group = 0; group < numGroups; ++group) {
+        if (resultTypes[group] != resultType)
+          return rewriter.notifyMatchFailure(
+              op, "four-block slots=1 group_reduce requires uniform physical "
+                  "types");
+        int64_t packedIndex = group / 8;
+        int64_t laneInPacked = group % 8;
+        SmallVector<int8_t> laneMaskBits(*lanesPerPart, 0);
+        laneMaskBits[laneInPacked] = 1;
+        FailureOr<Value> laneMask = materializeConstantMaskChunk(
+            op.getLoc(), maskType, laneMaskBits, rewriter);
+        if (failed(laneMask))
+          return rewriter.notifyMatchFailure(
+              op, "failed to create four-block slots=1 extract mask");
+        results[group] =
+            rewriter
+                .create<VsqzOp>(op.getLoc(), resultType,
+                                packedResults[packedIndex], *laneMask)
+                .getResult();
+      }
+
+      replaceOpWithFlatConvertedValues(rewriter, op, results,
+                                       *this->getTypeConverter());
       return success();
     }
 

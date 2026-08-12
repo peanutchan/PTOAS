@@ -134,6 +134,8 @@ std::unique_ptr<Pass> createVMILayoutSinkMaterializationPass();
 std::unique_ptr<Pass> createVMILegalizeArithSelectPass();
 std::unique_ptr<Pass> createVMILowerUnifiedToLegacyPass();
 std::unique_ptr<Pass> createVMINormalizeSignlessIntToUnsignedPass();
+std::unique_ptr<Pass> createVMIInferLayoutPlanPass();
+std::unique_ptr<Pass> createVMIApplyLayoutPlanPass();
 std::unique_ptr<Pass> createVMIToVPTOPass();
 std::unique_ptr<Pass> createInsertTemplateAttributesPass();
 std::unique_ptr<Pass> createExpandTileOpPass();

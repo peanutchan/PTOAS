@@ -13,6 +13,7 @@
 #include "PTO/Transforms/VPTOLLVMEmitter.h"
 #include "PTO/Transforms/Passes.h"
 #include "PTO/Transforms/BufferizableOpInterfaceImpl.h"
+#include "PTO/Transforms/VMILayoutPlan.h"
 #include "VPTOHostStubEmission.h"
 #include "PTO/Transforms/CppPostprocess.h"
 #include "mlir/AsmParser/AsmParserState.h"
@@ -452,6 +453,34 @@ static llvm::cl::opt<bool> disableInferLayout(
     "disable-infer-layout",
     llvm::cl::desc("Disable PTO layout inference pass (static-only)"),
     llvm::cl::init(false));
+
+static llvm::cl::opt<std::string> vmiLayoutMode(
+    "vmi-layout-mode",
+    llvm::cl::desc(
+        "VMI layout algebra mode: legacy (default, unchanged pipeline), "
+        "auto (infer+apply plan), override (require plan file/attr)"),
+    llvm::cl::value_desc("legacy|auto|override"),
+    llvm::cl::init("legacy"));
+
+static llvm::cl::opt<std::string> vmiLayoutPlanFile(
+    "vmi-layout-plan-file",
+    llvm::cl::desc("External layout plan override file (text)"),
+    llvm::cl::value_desc("path"),
+    llvm::cl::init(""));
+
+static llvm::cl::opt<std::string> dumpVmiLayoutPlan(
+    "dump-vmi-layout-plan",
+    llvm::cl::desc("Write the selected layout plan text to this path"),
+    llvm::cl::value_desc("path"),
+    llvm::cl::init(""));
+
+static llvm::cl::opt<std::string> dumpAssignedVmi(
+    "dump-assigned-vmi",
+    llvm::cl::desc(
+        "After layout assignment, write assigned VMI IR to this path "
+        "(plan modes only)"),
+    llvm::cl::value_desc("path"),
+    llvm::cl::init(""));
 
 static llvm::cl::opt<bool> enableSoftPostUpdate(
     "enable-vpto-soft-postupdate",
@@ -2931,6 +2960,96 @@ static void appendVMISemanticPipeline(OpPassManager &pm) {
   // before any verifier, layout, or lowering pass sees them.
   pm.addNestedPass<func::FuncOp>(
       pto::createVMINormalizeSignlessIntToUnsignedPass());
+  // First-class layout plan (auto/override). Legacy mode skips these passes
+  // so the historical pipeline remains byte-for-byte unchanged.
+  const bool planMode =
+      vmiLayoutMode == "auto" || vmiLayoutMode == "override";
+  if (planMode) {
+    if (!vmiLayoutPlanFile.empty()) {
+      // Stamp override plan onto the module before infer/apply.
+      struct StampOverridePlanPass
+          : public PassWrapper<StampOverridePlanPass, OperationPass<ModuleOp>> {
+        MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StampOverridePlanPass)
+        StringRef getArgument() const final {
+          return "vmi-stamp-layout-plan-file";
+        }
+        StringRef getDescription() const final {
+          return "Load --vmi-layout-plan-file onto the module";
+        }
+        void runOnOperation() override {
+          auto fileOrErr = llvm::MemoryBuffer::getFile(vmiLayoutPlanFile);
+          if (!fileOrErr) {
+            getOperation()->emitError()
+                << "cannot read --vmi-layout-plan-file: " << vmiLayoutPlanFile;
+            signalPassFailure();
+            return;
+          }
+          FailureOr<pto::VMILayoutPlan> plan = pto::parseLayoutPlanText(
+              fileOrErr.get()->getBuffer(), llvm::errs());
+          if (failed(plan)) {
+            signalPassFailure();
+            return;
+          }
+          plan->source = "override";
+          pto::setLayoutPlanAttr(getOperation(), *plan);
+        }
+      };
+      pm.addPass(std::make_unique<StampOverridePlanPass>());
+    } else if (vmiLayoutMode == "override") {
+      struct RequireOverridePlanPass
+          : public PassWrapper<RequireOverridePlanPass,
+                               OperationPass<ModuleOp>> {
+        MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RequireOverridePlanPass)
+        StringRef getArgument() const final {
+          return "vmi-require-layout-plan-override";
+        }
+        StringRef getDescription() const final {
+          return "Fail if no override layout plan is present";
+        }
+        void runOnOperation() override {
+          auto plan = pto::getLayoutPlanAttr(getOperation());
+          if (!plan || plan->source != "override") {
+            getOperation()->emitError()
+                << "--vmi-layout-mode=override requires "
+                   "--vmi-layout-plan-file or a module pto.vmi.layout_plan "
+                   "with source=override";
+            signalPassFailure();
+          }
+        }
+      };
+      pm.addPass(std::make_unique<RequireOverridePlanPass>());
+    }
+    pm.addPass(pto::createVMIInferLayoutPlanPass());
+    pm.addPass(pto::createVMIApplyLayoutPlanPass());
+    if (!dumpVmiLayoutPlan.empty()) {
+      struct DumpLayoutPlanPass
+          : public PassWrapper<DumpLayoutPlanPass, OperationPass<ModuleOp>> {
+        MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(DumpLayoutPlanPass)
+        StringRef getArgument() const final { return "vmi-dump-layout-plan"; }
+        StringRef getDescription() const final {
+          return "Dump selected layout plan text";
+        }
+        void runOnOperation() override {
+          auto plan = pto::getLayoutPlanAttr(getOperation());
+          if (!plan) {
+            signalPassFailure();
+            return;
+          }
+          std::error_code ec;
+          llvm::raw_fd_ostream os(dumpVmiLayoutPlan, ec);
+          if (ec) {
+            getOperation()->emitError()
+                << "cannot write --dump-vmi-layout-plan: " << ec.message();
+            signalPassFailure();
+            return;
+          }
+          os << pto::formatLayoutPlanText(*plan);
+        }
+      };
+      pm.addPass(std::make_unique<DumpLayoutPlanPass>());
+    }
+  }
+
   // Expand unified VMI ops before layout assignment so grouped vci becomes
   // the contiguous-only legacy group_iota producer. Layout assignment can
   // then materialize any consumer-requested non-contiguous use explicitly.
@@ -2946,6 +3065,28 @@ static void appendVMISemanticPipeline(OpPassManager &pm) {
   pm.addPass(pto::createVMILegalizeArithSelectPass());
   pm.addPass(pto::createVMIMaskGranularityAssignmentPass());
   pm.addPass(pto::createVMILayoutAssignmentPass());
+  if (planMode && !dumpAssignedVmi.empty()) {
+    struct DumpAssignedVMIPass
+        : public PassWrapper<DumpAssignedVMIPass, OperationPass<ModuleOp>> {
+      MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(DumpAssignedVMIPass)
+      StringRef getArgument() const final { return "vmi-dump-assigned-vmi"; }
+      StringRef getDescription() const final {
+        return "Dump assigned VMI after layout assignment";
+      }
+      void runOnOperation() override {
+        std::error_code ec;
+        llvm::raw_fd_ostream os(dumpAssignedVmi, ec);
+        if (ec) {
+          getOperation()->emitError()
+              << "cannot write --dump-assigned-vmi: " << ec.message();
+          signalPassFailure();
+          return;
+        }
+        getOperation()->print(os);
+      }
+    };
+    pm.addPass(std::make_unique<DumpAssignedVMIPass>());
+  }
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
   pm.addPass(pto::createVMILayoutRematerializePass());

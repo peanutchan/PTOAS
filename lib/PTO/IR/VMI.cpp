@@ -1693,6 +1693,12 @@ LogicalResult VMIGroupBroadcastOp::verify() {
         "requires num_groups to evenly divide result logical lane count");
   if (sourceType.getElementType() != resultType.getElementType())
     return emitOpError("requires source and result element types to match");
+  if (auto hint = getPreferredExpandAttr()) {
+    StringRef value = hint.getValue();
+    if (value != "vselr" && value != "vbrc")
+      return emitOpError(
+          "preferred_expand on group_broadcast must be one of: vselr, vbrc");
+  }
   if (auto sourceLayout = sourceType.getLayoutAttr()) {
     if (!sourceLayout.isGroupSlots() ||
         sourceLayout.getNumGroups() != numGroups)
@@ -2098,6 +2104,16 @@ LogicalResult VMIGroupBroadcastLoadOp::verify() {
     if (resultLayout.isGroupSlots())
       return emitOpError(
           "requires layout-assigned result to use a dense VMI layout");
+  }
+  if (auto hint = getPreferredExpandAttr()) {
+    StringRef value = hint.getValue();
+    if (value == "vbrc")
+      return emitOpError(
+          "preferred_expand=vbrc is invalid on group_broadcast_load "
+          "(use group_broadcast / vbrc)");
+    if (value != "brc" && value != "e2b" && value != "vselr")
+      return emitOpError(
+          "preferred_expand must be one of: brc, e2b, vselr");
   }
   return verifyNumGroups(getOperation(), resultType, numGroups);
 }

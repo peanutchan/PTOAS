@@ -1,0 +1,39 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-apply-layout-plan | FileCheck %s
+
+module attributes {
+  pto.vmi.layout_plan = {
+    version = 1 : i64,
+    source = "override",
+    preferred_expand = "vbrc",
+    group = 8 : i64,
+    materialize_boundary = false,
+    stage_split = false,
+    residency = "keeplive",
+    morphs = ["Compact(8)", "Expand(8,vbrc)", "KeepLive"]
+  }
+} {
+  func.func @keeplive_vbrc(
+      %slots: !pto.vmi.vreg<8xf32>,
+      %dst: !pto.ptr<f32, ub>, %off: index)
+      -> !pto.vmi.vreg<64xf32> {
+    %c1 = arith.constant 1 : index
+    pto.vmi.vstore %slots, %dst[%off], %c1 {group = 8}
+        : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
+    %out = pto.vmi.vbrc %slots {group = 8}
+        : !pto.vmi.vreg<8xf32> -> !pto.vmi.vreg<64xf32>
+    return %out : !pto.vmi.vreg<64xf32>
+  }
+}
+
+// CHECK: residency = "keeplive"
+// CHECK: preferred_expand = "vbrc"
+// CHECK: pto.vmi.vbrc {{.*}}{group = 8{{.*}}preferred_expand = "vbrc"}
+// CHECK-NOT: pto.mem_bar "VST_VLD"

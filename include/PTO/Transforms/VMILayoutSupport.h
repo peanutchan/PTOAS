@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 
+#include <optional>
 #include <string>
 
 namespace mlir::pto {
@@ -149,6 +150,21 @@ enum class VMIGroupBroadcastLoadDirectKind {
   E2B,
   BRC,
 };
+
+/// Layout-algebra expand strategy hint (Phase 3).
+enum class VMIPreferredExpand {
+  None,
+  Brc,
+  E2b,
+  Vbrc,
+  Vselr,
+};
+
+/// Parse `preferred_expand` string (`brc`/`e2b`/`vbrc`/`vselr`).
+std::optional<VMIPreferredExpand> parsePreferredExpand(StringRef value);
+
+/// Resolve op attr, else parent module `pto.vmi.preferred_expand`.
+VMIPreferredExpand resolvePreferredExpand(Operation *op);
 
 struct VMIGroupBroadcastLoadLayoutFact {
   VMIGroupBlockClass blockClass = VMIGroupBlockClass::OneBlock;
@@ -391,7 +407,8 @@ public:
       VMIGroupBroadcastLoadOp op, std::string *reason = nullptr) const;
   FailureOr<VMIGroupBroadcastLoadDirectFact> getGroupBroadcastLoadDirectFact(
       VMIVRegType resultType, Type sourceType, Value sourceGroupStride,
-      int64_t numGroups, std::string *reason = nullptr) const;
+      int64_t numGroups, std::string *reason = nullptr,
+      VMIPreferredExpand preferred = VMIPreferredExpand::None) const;
 
   FailureOr<VMIHistogramLayoutFact>
   getVdhistLayoutFact(VMIVdhistOp op, std::string *reason = nullptr) const;

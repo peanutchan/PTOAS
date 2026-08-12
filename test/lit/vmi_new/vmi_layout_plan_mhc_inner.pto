@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-apply-layout-plan | FileCheck %s --check-prefix=INNER
+
+module attributes {
+  pto.vmi.layout_plan = {
+    version = 1 : i64,
+    source = "override",
+    residency = "materialize",
+    materialize_scope = "inner",
+    materialize_boundary = true,
+    morphs = ["MaterializeBoundary@inner"]
+  }
+} {
+  func.func @tk_mhc_red_inner(
+      %mix_ub: !pto.ptr<f32, ub>,
+      %x_ub: !pto.ptr<f32, ub>,
+      %og_ub: !pto.ptr<f32, ub>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %c8 = arith.constant 8 : index
+    %c64 = arith.constant 64 : index
+    scf.for %i_mhc = %c0 to %c4 step %c1 {
+      scf.for %c = %c0 to %c8 step %c1 {
+        %acc = pto.vmi.vload %mix_ub[%i_mhc]
+            : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+        %c_off = arith.muli %c, %c64 : index
+        %x = pto.vmi.vload %x_ub[%c_off]
+            : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+        %og = pto.vmi.vload %og_ub[%c_off]
+            : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+        %acc2 = pto.vmi.vmula %acc, %og, %x
+            : !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>, !pto.vmi.vreg<64xf32>
+            -> !pto.vmi.vreg<64xf32>
+        pto.vmi.vstore %acc2, %mix_ub[%i_mhc]
+            : !pto.vmi.vreg<64xf32>, !pto.ptr<f32, ub>
+      }
+    }
+    return
+  }
+}
+
+// CHECK: scf.for
+// CHECK: scf.for
+// CHECK: pto.vmi.vload
+// CHECK: pto.vmi.vmula
+// CHECK: pto.vmi.vstore
+// CHECK: pto.mem_bar "VST_VLD"
